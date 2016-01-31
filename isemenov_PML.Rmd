@@ -1,0 +1,136 @@
+---
+title: "isemenov_PML"
+author: "Ilia Semenov"
+date: "Saturday, January 30, 2016"
+output: html_document
+---
+
+## Synopsis
+This report is devoted to the analyses of the HAR (Human Activity Recognition) 
+data with the goal of building a predictive model. The data set used in this 
+research contains the values obtained from accelerometers on the belt, forearm,  
+arm, and dumbbell of 6 participants who were asked to perform particular exercise 
+(barbell lifting) in 5 distinctive ways (classes).Accurate prediction of classes 
+based on the accelerometer figures is the main purpose of project.
+Data source: http://groupware.les.inf.puc-rio.br/har
+
+
+## Loading and Describing the Raw Data
+First we load the raw data and take a first look at it.
+```{r}
+#download initial data (if it is not presented)
+data.download<-function(file.name,file.url) 
+        {
+        if(!file.exists(file.name))
+                {dataUrl<-file.url
+                 download.file(dataUrl,destfile=paste(".\\",file.name,sep=""))
+                 }
+        }
+data.download("pml-training.csv",
+              "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+data.download("pml-testing.csv",
+              "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+#loading data into R
+training<-read.csv("pml-training.csv")
+testing<-read.csv("pml-testing.csv")
+
+dim(training)
+
+#get summary of 20 randomly chosen columns and classe variable (target)
+summary(training[,c(sample(ncol(training[,-160]), 20),160)])
+
+```
+
+
+## Cleaning Data
+Next we process the data. As we can see from the step above, our data is highly 
+dimensional: 160 variables (including target variable classe in training set).
+However, looks like we can dramatically reduce number of variables. 
+First seven columns of data are describing the context of experiments 
+(participants names, dates), which should be taken away from model, 
+as we base our predictions solely on the measurements. Also, as we could see from 
+the step above, our data has a number of columns with mostly NA values - they 
+will likely be not useful for our model. Finally, we remove near-zero-variance 
+variables as they also do not have much predictive power. We perform processing 
+both on test and training data sets.
+```{r}
+library(caret)
+set.seed(123)
+#remove context columns
+training<-training[,-(1:7)]
+testing<-testing[,c(-(1:7),-160)]
+
+#remove columns with high number of NA rows (more than 70%)
+training[training=='#DIV/0!']<-NA
+testing[testing=='#DIV/0!']<-NA
+na_ind<-which(as.logical(apply(training, 2, 
+                                   function(x) sum(is.na(x)) / 
+                                           length(x) < 0.7))==F)
+training <- training[-na_ind]
+testing<-testing[-na_ind]
+
+#remove columns with near zero variance
+nzv_ind<-nearZeroVar(training)
+training<-training[,-nzv_ind]
+testing<-testing[,-nzv_ind]
+```
+
+
+
+## Building Predictive Model
+After processing step we are left with only 53 variables, and are ready to build
+the predictive model. As per our experience with Kaggle competitions, it is always 
+good to start with some kind of DTA and check its accuracy (if it is low, we try 
+different approach). Here we decide to go with Random Forest.
+First we divide our training set into training (75%) and testing (25%) parts. 
+Note: testing set loaded initially is unlabeled data for final model check. 
+Testing set obtained from training data is the one we will be checking accuracy 
+of our model on (as it is a part of training data, it is labeled). We use 'caret' 
+package for data partitioning.
+As the re-sampling technique for in-training model validation, we choose bootstrap
+method with 5 re-samplings. This is initial trial to make the model simpler.
+```{r}
+library(randomForest)
+#create training data partitioning
+inTrain <- createDataPartition(training$classe, p = 3/4)[[1]]
+training.train <- training[inTrain,]
+training.test <- training[-inTrain,]
+#define validation technique
+control <- trainControl(method="boot", number=5, allowParallel = TRUE)
+#train model
+mod.rf <- randomForest(classe ~ ., data = training.train,trControl=control)
+#in-sample accuracy check
+pred.rf.insample<- predict(mod.rf,training.train)
+confusionMatrix(pred.rf.insample,training.train$classe)
+```
+
+As we can see, our in-sample accuracy produced by the model equals 1, which is
+a perfect result. However, this might be indication of severe overfitting,
+and our out-of-sample accuracy might be low. Let's check that on the testing
+part of training set.
+```{r}
+pred.rf<- predict(mod.rf,training.test)
+confusionMatrix(pred.rf,training.test$classe)
+```
+
+The confusion matrix produced by our initial Random Forest model shows that we 
+have 99.5% accuracy on the testing part of training data. This is a great result
+right away! Looks like no overfitting is happening, and our model is just that good.
+We could have continue to fit other models and might even have received
+marginally better result, bu we consider this unnecessary, as the obtained model 
+accuracy level is superb.
+To show what are the most important variables in our model, we produce a plot of
+Gini Coefficient Decrease:
+```{r}
+varImpPlot(mod.rf)
+```
+
+As we can see, the most important data is produced by belt sensor and dumbbell
+sensors.
+Now, as we have a good model, we can try it on the unlabeled testing set.
+```{r}
+
+pred.rf.testing<-predict(mod.rf,testing)
+pred.rf.testing
+```
